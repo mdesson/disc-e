@@ -13,3 +13,9 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# secrets
+config.json
+
+# builds
+disc-e
