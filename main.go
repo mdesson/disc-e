@@ -95,7 +95,7 @@ func loadConfig(config *Config) error {
 
 func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	content := strings.ToLower(m.Content)
-	if len(content) <= 7 || content[:7] != "/dalle " || m.Author.ID == s.State.User.ID || m.Author.ID != "265326751801016320" {
+	if len(content) <= 7 || content[:7] != "/dalle " || m.Author.ID == s.State.User.ID {
 		return
 	}
 
