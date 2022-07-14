@@ -108,6 +108,12 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		Channel: channel,
 	}
 
+	// display help message if relevant
+	if prompt == "help" {
+		s.ChannelMessageSend(imgReq.Channel.ID, "Type /dalle with some words to get an image! (/dalle help to display this message\n🤖 = AI is working on it\n🛠️ = I'm preparing your images\n✅ = Done! I've sent your nightmare fuel\n❌ = It didn't work for some reason")
+		return
+	}
+
 	// update status to show that AI is working on the request
 	err := s.MessageReactionAdd(imgReq.Channel.ID, imgReq.ID, "🤖")
 	if err != nil {
