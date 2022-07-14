@@ -20,9 +20,6 @@ import (
 	gim "github.com/ozankasikci/go-image-merge"
 )
 
-// TODO: Restructure into queue (one channel for requesting, one for sending)
-// TODO: React with emojis on original message to show status: 🗃️ (enqueued), ⚒️, (in progress), ❌ (failed), ✅ (done)
-
 type Config struct {
 	DiscordToken string   `json:"discordToken"`
 	ServerNames  []string `json:"serverNames"`
@@ -111,23 +108,37 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		Channel: channel,
 	}
 
-	fmt.Printf("[%s] From %s in %s (%s)\n", imgReq.ID, imgReq.Author, imgReq.Channel.Name, imgReq.Guild.Name)
+	// update status to show that AI is working on the request
+	err := s.MessageReactionAdd(imgReq.Channel.ID, imgReq.ID, "🤖")
+	if err != nil {
+		fmt.Printf("[%s] %s", imgReq.ID, err)
+		return
+	}
 
 	// http request to AI backend
 	base64Images, err := fetchImages(&imgReq)
 	if err != nil {
 		fmt.Printf("[%s] %s", imgReq.ID, err)
+		setStatus(s, imgReq, "🤖", "❌")
+		return
 	}
+
 	// convert base64 slice into one image
+	setStatus(s, imgReq, "🤖", "🛠️")
+
 	err = base64ToImage(base64Images, &imgReq)
 	if err != nil {
 		fmt.Printf("[%s] %s", imgReq.ID, err)
+		setStatus(s, imgReq, "🛠️", "❌")
+		return
 	}
 
 	// open file and delete it when done
 	f, err := os.Open(imgReq.ID + ".jpg")
 	if err != nil {
 		fmt.Printf("[%s] %v\n", imgReq.ID, err)
+		setStatus(s, imgReq, "🛠️", "❌")
+		return
 	}
 	defer f.Close()
 	defer os.Remove(imgReq.ID + ".jpg")
@@ -136,8 +147,11 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	_, err = s.ChannelFileSendWithMessage(channel.ID, fmt.Sprintf("*%s* (%v)", prompt, imgReq.Duration), imgReq.ID+".jpg", f)
 	if err != nil {
 		fmt.Printf("[%s] %v\n", imgReq.ID, err)
+		setStatus(s, imgReq, "🛠️", "❌")
 		return
 	}
+
+	setStatus(s, imgReq, "🛠️", "✅")
 	fmt.Printf("[%s] Successfully sent message to channel\n", imgReq.ID)
 }
 
@@ -249,5 +263,17 @@ func combineImages(imgReq *ImageRequest, imageCount int) error {
 	}
 	fmt.Printf("[%s] Created image\n", imgReq.ID)
 
+	return nil
+}
+
+func setStatus(s *discordgo.Session, imgReq ImageRequest, oldEmoji string, newEmoji string) error {
+	err := s.MessageReactionRemove(imgReq.Channel.ID, imgReq.ID, oldEmoji, "@me")
+	if err != nil {
+		return err
+	}
+	err = s.MessageReactionAdd(imgReq.Channel.ID, imgReq.ID, newEmoji)
+	if err != nil {
+		return err
+	}
 	return nil
 }
