@@ -110,7 +110,7 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// display help message if relevant
 	if prompt == "help" {
-		s.ChannelMessageSend(imgReq.Channel.ID, "Type /dalle with some words to get an image! (/dalle help to display this message\n🤖 = AI is working on it\n🛠️ = I'm preparing your images\n✅ = Done! I've sent your nightmare fuel\n❌ = It didn't work for some reason")
+		s.ChannelMessageSend(imgReq.Channel.ID, "Type `/dalle` with some words to get an image! (`/dalle help` to display this message)\n🤖 = AI is working on it\n🛠️ = I'm preparing your images\n✅ = Done! I've sent your nightmare fuel\n❌ = It didn't work for some reason")
 		return
 	}
 
@@ -150,7 +150,7 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	defer os.Remove(imgReq.ID + ".jpg")
 
 	// send to channel
-	_, err = s.ChannelFileSendWithMessage(channel.ID, fmt.Sprintf("*%s* (%v)", prompt, imgReq.Duration), imgReq.ID+".jpg", f)
+	_, err = s.ChannelFileSendWithMessage(channel.ID, fmt.Sprintf("*%s*", prompt), imgReq.ID+".jpg", f)
 	if err != nil {
 		fmt.Printf("[%s] %v\n", imgReq.ID, err)
 		setStatus(s, imgReq, "🛠️", "❌")
@@ -186,7 +186,7 @@ func fetchImages(imgReq *ImageRequest) ([]string, error) {
 		}
 
 		if resp.StatusCode == 200 {
-			imgReq.Duration = time.Now().Sub(start)
+			imgReq.Duration = time.Now().Sub(start).Truncate(time.Second)
 
 			fmt.Printf("[%s] Success after %d tries (%v)\n", imgReq.ID, i+1, imgReq.Duration)
 
@@ -207,7 +207,7 @@ func fetchImages(imgReq *ImageRequest) ([]string, error) {
 		resp.Body.Close()
 	}
 
-	imgReq.Duration = time.Now().Sub(start)
+	imgReq.Duration = time.Now().Sub(start).Truncate(time.Second)
 
 	return nil, errors.New(fmt.Sprintf("Failed to get images for request (%v)\n", imgReq.Duration))
 }
