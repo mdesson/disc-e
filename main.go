@@ -133,7 +133,7 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	defer os.Remove(imgReq.ID + ".jpg")
 
 	// send to channel
-	_, err = s.ChannelFileSendWithMessage(channel.ID, fmt.Sprintf("*%s*", prompt), imgReq.ID+".jpg", f)
+	_, err = s.ChannelFileSendWithMessage(channel.ID, fmt.Sprintf("*%s* (%v)", prompt, imgReq.Duration), imgReq.ID+".jpg", f)
 	if err != nil {
 		fmt.Printf("[%s] %v\n", imgReq.ID, err)
 		return
