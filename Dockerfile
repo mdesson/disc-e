@@ -1,5 +1,4 @@
 FROM --platform=linux/arm/v7 golang:latest AS builder
-FROM golang:latest AS builder
 WORKDIR /usr/src/disc-e
 COPY . .
 RUN go mod tidy
