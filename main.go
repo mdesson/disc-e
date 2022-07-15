@@ -181,7 +181,6 @@ func fetchImages(imgReq *ImageRequest) ([]string, error) {
 	for i := 0; i < config.DalleRetries; i++ {
 		resp, err := client.Do(req)
 		if err != nil {
-			resp.Body.Close()
 			return nil, err
 		}
 
