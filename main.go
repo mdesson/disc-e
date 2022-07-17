@@ -180,7 +180,10 @@ func fetchImages(imgReq *ImageRequest) ([]string, error) {
 	// try n times (set in config) to fetch images from DALL-E Mini API
 	for i := 0; i < config.DalleRetries; i++ {
 		resp, err := client.Do(req)
-		if err != nil {
+		if errors.Is(err, syscall.ECONNRESET) {
+			// retry if connection is reset by dall-e mini's server
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 
@@ -204,6 +207,7 @@ func fetchImages(imgReq *ImageRequest) ([]string, error) {
 			return r.Images, nil
 		}
 		resp.Body.Close()
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	imgReq.Duration = time.Now().Sub(start).Truncate(time.Second)
