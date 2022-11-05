@@ -2,11 +2,8 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"image/jpeg"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -14,30 +11,26 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
-	gim "github.com/ozankasikci/go-image-merge"
 )
 
 type Config struct {
-	DiscordToken string   `json:"discordToken"`
-	ServerNames  []string `json:"serverNames"`
-	Parallelism  int      `json:"parallelism"`
-	DalleRetries int      `json:"dalleRetries"`
+	DiscordToken string `json:"discordToken"`
+	OpenAIKey    string `json:"openAIKey"`
 }
 
 type ImageRequest struct {
-	ID       string
-	Prompt   string
-	Author   string
-	Guild    *discordgo.Guild
-	Channel  *discordgo.Channel
-	Duration time.Duration
+	ID      string
+	Prompt  string
+	Author  string
+	Guild   *discordgo.Guild
+	Channel *discordgo.Channel
 }
 
 type ImageResponse struct {
-	Images []string `json:"images"`
+	Created int                 `json:"created"`
+	Data    []map[string]string `json:"data"`
 }
 
 var config Config
@@ -122,35 +115,15 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	// http request to AI backend
-	base64Images, err := fetchImages(&imgReq)
+	imgURL, err := fetchImage(&imgReq)
 	if err != nil {
-		fmt.Printf("[%s] %s", imgReq.ID, err)
+		fmt.Printf("[%s] %s\n", imgReq.ID, err)
 		setStatus(s, imgReq, "🤖", "❌")
 		return
 	}
 
-	// convert base64 slice into one image
-	setStatus(s, imgReq, "🤖", "🛠️")
-
-	err = base64ToImage(base64Images, &imgReq)
-	if err != nil {
-		fmt.Printf("[%s] %s\n", imgReq.ID, err)
-		setStatus(s, imgReq, "🛠️", "❌")
-		return
-	}
-
-	// open file and delete it when done
-	f, err := os.Open(imgReq.ID + ".jpg")
-	if err != nil {
-		fmt.Printf("[%s] %v\n", imgReq.ID, err)
-		setStatus(s, imgReq, "🛠️", "❌")
-		return
-	}
-	defer f.Close()
-	defer os.Remove(imgReq.ID + ".jpg")
-
 	// send to channel
-	_, err = s.ChannelFileSendWithMessage(channel.ID, fmt.Sprintf("*%s*", prompt), imgReq.ID+".jpg", f)
+	_, err = s.ChannelMessageSend(channel.ID, imgURL)
 	if err != nil {
 		fmt.Printf("[%s] %v\n", imgReq.ID, err)
 		setStatus(s, imgReq, "🛠️", "❌")
@@ -161,118 +134,46 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	fmt.Printf("[%s] Successfully sent message to channel\n", imgReq.ID)
 }
 
-func fetchImages(imgReq *ImageRequest) ([]string, error) {
+func fetchImage(imgReq *ImageRequest) (string, error) {
 	fmt.Printf("[%s] Fetching images for prompt %s\n", imgReq.ID, imgReq.Prompt)
 
 	// Create http request
-	url := "https://bf.dallemini.ai/generate"
-	jsonStr := fmt.Sprintf(`{"prompt": "%s"}`, imgReq.Prompt)
+	url := "https://api.openai.com/v1/images/generations"
+	jsonStr := fmt.Sprintf(`{"prompt": "%s", "n": 1, "size": "512x512"}`, imgReq.Prompt)
 	jsonBytes := []byte(jsonStr)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
+
+	// Set headers
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", config.OpenAIKey))
+
+	// Make Request
 	client := &http.Client{}
-	start := time.Now()
-
-	// try n times (set in config) to fetch images from DALL-E Mini API
-	for i := 0; i < config.DalleRetries; i++ {
-		resp, err := client.Do(req)
-		if errors.Is(err, syscall.ECONNRESET) {
-			// retry if connection is reset by dall-e mini's server
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode == 200 {
-			imgReq.Duration = time.Now().Sub(start).Truncate(time.Second)
-
-			fmt.Printf("[%s] Success after %d tries (%v)\n", imgReq.ID, i+1, imgReq.Duration)
-
-			b, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				return nil, err
-			}
-			resp.Body.Close()
-
-			var r ImageResponse
-			err = json.Unmarshal(b, &r)
-			if err != nil {
-				return nil, err
-			}
-
-			return r.Images, nil
-		}
-		resp.Body.Close()
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	imgReq.Duration = time.Now().Sub(start).Truncate(time.Second)
-
-	return nil, errors.New(fmt.Sprintf("Failed to get images for request (%v)\n", imgReq.Duration))
-}
-
-func base64ToImage(base64Images []string, imgReq *ImageRequest) error {
-	// temporarily save as file
-	for i, base64Img := range base64Images {
-		filename := fmt.Sprintf("%s-%d.jpg", imgReq.ID, i)
-		unbased, err := base64.StdEncoding.DecodeString(base64Img)
-		if err != nil {
-			return err
-		}
-
-		// create individual image files, clean up when done with them
-		err = os.WriteFile(filename, unbased, 0644)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			err := os.Remove(filename)
-			if err != nil {
-				fmt.Printf("[%s] %v\n", imgReq.ID, err)
-			}
-		}()
-
-	}
-
-	// stitch images together
-	err := combineImages(imgReq, len(base64Images))
+	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
-}
-
-func combineImages(imgReq *ImageRequest, imageCount int) error {
-	grids := []*gim.Grid{}
-	for i := 0; i < imageCount; i++ {
-		filename := fmt.Sprintf("%s-%d.jpg", imgReq.ID, i)
-		grid := gim.Grid{ImageFilePath: filename}
-		grids = append(grids, &grid)
-	}
-
-	rgba, err := gim.New(grids, 3, 3).Merge()
+	// Extract URL from response
+	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return "", err
 	}
+	resp.Body.Close()
 
-	file, err := os.Create(imgReq.ID + ".jpg")
+	var r ImageResponse
+	err = json.Unmarshal(b, &r)
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer file.Close()
 
-	err = jpeg.Encode(file, rgba, &jpeg.Options{Quality: 80})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("[%s] Created image\n", imgReq.ID)
+	imgURL := r.Data[0]["url"]
 
-	return nil
+	return imgURL, nil
 }
 
 func setStatus(s *discordgo.Session, imgReq ImageRequest, oldEmoji string, newEmoji string) error {
