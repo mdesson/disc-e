@@ -134,7 +134,7 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	err = base64ToImage(base64Images, &imgReq)
 	if err != nil {
-		fmt.Printf("[%s] %s", imgReq.ID, err)
+		fmt.Printf("[%s] %s\n", imgReq.ID, err)
 		setStatus(s, imgReq, "🛠️", "❌")
 		return
 	}
