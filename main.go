@@ -27,12 +27,11 @@ type Config struct {
 }
 
 type ImageRequest struct {
-	ID         string
-	Prompt     string
-	AuthorName string
-	AuthorID   string
-	Guild      *discordgo.Guild
-	Channel    *discordgo.Channel
+	ID       string
+	Prompt   string
+	AuthorID string
+	Guild    *discordgo.Guild
+	Channel  *discordgo.Channel
 }
 
 type ImageResponse struct {
@@ -54,6 +53,7 @@ func main() {
 	}
 
 	discord.AddHandler(onMessageHandler)
+	discord.AddHandler(onEmojiAddHandler)
 
 	err = discord.Open()
 	if err != nil {
@@ -90,6 +90,88 @@ func loadConfig(config *Config) error {
 	return nil
 }
 
+func onEmojiAddHandler(s *discordgo.Session, r *discordgo.MessageReactionAdd) {
+	// Get original message
+	m, err := s.ChannelMessage(r.ChannelID, r.MessageID)
+	if err != nil {
+		fmt.Printf("[%s] Error on getting message %v\n", r.MessageID, err)
+		return
+	}
+
+	// Ignore user messages, reactions from the bot, and messages with no replies
+	if m.Author.ID != s.State.User.ID || r.MessageReaction.UserID == s.State.User.ID || m.ReferencedMessage == nil {
+		return
+	}
+
+	if r.Emoji.Name != "🔁" {
+		return
+	}
+
+	// Find the original message requesting the image
+	m = m.ReferencedMessage
+	content := strings.ToLower(m.Content)
+	for {
+		hasNullReply := m.ReferencedMessage == nil
+		fromBot := m.Author.ID == s.State.User.ID
+		hasCorrectFormat := len(content) >= 7 && content[:7] == "/dalle "
+
+		if fromBot {
+			if hasNullReply {
+				// Ignore bot messages with no replies
+				return
+			} else {
+				// Bot message has a reply, keep searching
+				m = m.ReferencedMessage
+				content = strings.ToLower(m.Content)
+				continue
+			}
+		} else {
+			if hasCorrectFormat {
+				// Message from the user in the correct format, we found our message
+				break
+			} else {
+				// Irrelevant user message, ignore
+				return
+			}
+		}
+	}
+
+	prompt := strings.TrimSpace(content[7:])
+	guild, _ := s.Guild(m.GuildID)
+	channel, _ := s.Channel(m.ChannelID)
+
+	if prompt == "help" {
+		return
+	}
+
+	fmt.Printf("[%v] Sending variation for prompt: %s\n", r.MessageID, prompt)
+	setStatus(s, r.ChannelID, r.MessageID, "🤖")
+
+	imgReq := ImageRequest{
+		ID:       m.ID,
+		Prompt:   prompt,
+		AuthorID: m.Author.ID,
+		Guild:    guild,
+		Channel:  channel,
+	}
+
+	imgURL, err := fetchImage(&imgReq)
+	if err != nil {
+		fmt.Printf("[%s] Error on getting message %v\n", r.MessageID, err)
+		return
+	}
+	reply, err := s.ChannelMessageSendReply(channel.ID, imgURL, m.Reference())
+	if err != nil {
+		swapStatus(s, r.ChannelID, r.MessageID, "🤖", "❌")
+		fmt.Printf("[%s] %v\n", imgReq.ID, err)
+		return
+	}
+	swapStatus(s, r.ChannelID, r.MessageID, "🤖", "✅")
+	setStatus(s, reply.ChannelID, reply.ID, "🔁")
+
+	fmt.Printf("[%s] Sent variation\n", imgReq.ID)
+}
+
 func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	content := strings.ToLower(m.Content)
 	if len(content) <= 7 || content[:7] != "/dalle " || m.Author.ID == s.State.User.ID {
@@ -101,17 +183,16 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	channel, _ := s.Channel(m.ChannelID)
 
 	imgReq := ImageRequest{
-		ID:         m.ID,
-		Prompt:     prompt,
-		AuthorName: m.Message.Author.Username,
-		AuthorID:   m.Message.Author.ID,
-		Guild:      guild,
-		Channel:    channel,
+		ID:       m.ID,
+		Prompt:   prompt,
+		AuthorID: m.Message.Author.ID,
+		Guild:    guild,
+		Channel:  channel,
 	}
 
 	// display help message if relevant
 	if prompt == "help" {
-		s.ChannelMessageSend(imgReq.Channel.ID, "Type `/dalle` with some words to get an image! (`/dalle help` to display this message)\n🤖 = AI is working on it\n✅ = Done! I've sent your nightmare fuel\n❌ = It didn't work for some reason")
+		s.ChannelMessageSend(imgReq.Channel.ID, "Type `/dalle` with some words to get an image! (`/dalle help` to display this message)\n🔁 = Click this to try again for a better picture\n🤖 = AI is working on it\n✅ = Done! I've sent your nightmare fuel\n❌ = It didn't work for some reason")
 		return
 	}
 
@@ -127,7 +208,7 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		_, err := s.ChannelMessageSendReply(channel.ID, config.SpeicalReply, m.Reference())
 		if err != nil {
 			fmt.Printf("[%s] %v\n", imgReq.ID, err)
-			swapStatus(s, imgReq, "🤖", "❌")
+			swapStatus(s, imgReq.Channel.ID, imgReq.ID, "🤖", "❌")
 			return
 		}
 	}
@@ -136,19 +217,20 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	imgURL, err := fetchImage(&imgReq)
 	if err != nil {
 		fmt.Printf("[%s] %s\n", imgReq.ID, err)
-		swapStatus(s, imgReq, "🤖", "❌")
+		swapStatus(s, imgReq.Channel.ID, imgReq.ID, "🤖", "❌")
 		return
 	}
 
 	// send to channel
-	_, err = s.ChannelMessageSendReply(channel.ID, imgURL, m.Reference())
+	reply, err := s.ChannelMessageSendReply(channel.ID, imgURL, m.Reference())
 	if err != nil {
 		fmt.Printf("[%s] %v\n", imgReq.ID, err)
-		swapStatus(s, imgReq, "🤖", "❌")
+		swapStatus(s, imgReq.Channel.ID, imgReq.ID, "🤖", "❌")
 		return
 	}
 
-	swapStatus(s, imgReq, "🤖", "✅")
+	swapStatus(s, imgReq.Channel.ID, imgReq.ID, "🤖", "✅")
+	setStatus(s, reply.ChannelID, reply.ID, "🔁")
 	fmt.Printf("[%s] Successfully sent message to channel\n", imgReq.ID)
 }
 
@@ -194,20 +276,20 @@ func fetchImage(imgReq *ImageRequest) (string, error) {
 	return imgURL, nil
 }
 
-func swapStatus(s *discordgo.Session, imgReq ImageRequest, oldEmoji string, newEmoji string) error {
-	err := s.MessageReactionRemove(imgReq.Channel.ID, imgReq.ID, oldEmoji, "@me")
+func swapStatus(s *discordgo.Session, channelID string, messageID string, oldEmoji string, newEmoji string) error {
+	err := s.MessageReactionRemove(channelID, messageID, oldEmoji, "@me")
 	if err != nil {
 		return err
 	}
-	err = s.MessageReactionAdd(imgReq.Channel.ID, imgReq.ID, newEmoji)
+	err = s.MessageReactionAdd(channelID, messageID, newEmoji)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func setStatus(s *discordgo.Session, imgReq ImageRequest, emoji string) error {
-	err := s.MessageReactionAdd(imgReq.Channel.ID, imgReq.ID, emoji)
+func setStatus(s *discordgo.Session, channelID string, messageID string, emoji string) error {
+	err := s.MessageReactionAdd(channelID, messageID, emoji)
 	if err != nil {
 		return err
 	}
