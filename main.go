@@ -15,17 +15,24 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+const (
+	ZackID = "144628264583954433"
+)
+
 type Config struct {
 	DiscordToken string `json:"discordToken"`
 	OpenAIKey    string `json:"openAIKey"`
+	SpecialUser  string `json:"specialUser"`
+	SpeicalReply string `json:"specialReply"`
 }
 
 type ImageRequest struct {
-	ID      string
-	Prompt  string
-	Author  string
-	Guild   *discordgo.Guild
-	Channel *discordgo.Channel
+	ID         string
+	Prompt     string
+	AuthorName string
+	AuthorID   string
+	Guild      *discordgo.Guild
+	Channel    *discordgo.Channel
 }
 
 type ImageResponse struct {
@@ -94,16 +101,17 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	channel, _ := s.Channel(m.ChannelID)
 
 	imgReq := ImageRequest{
-		ID:      m.ID,
-		Prompt:  prompt,
-		Author:  m.Message.Author.Username,
-		Guild:   guild,
-		Channel: channel,
+		ID:         m.ID,
+		Prompt:     prompt,
+		AuthorName: m.Message.Author.Username,
+		AuthorID:   m.Message.Author.ID,
+		Guild:      guild,
+		Channel:    channel,
 	}
 
 	// display help message if relevant
 	if prompt == "help" {
-		s.ChannelMessageSend(imgReq.Channel.ID, "Type `/dalle` with some words to get an image! (`/dalle help` to display this message)\n🤖 = AI is working on it\n🛠️ = I'm preparing your images\n✅ = Done! I've sent your nightmare fuel\n❌ = It didn't work for some reason")
+		s.ChannelMessageSend(imgReq.Channel.ID, "Type `/dalle` with some words to get an image! (`/dalle help` to display this message)\n🤖 = AI is working on it\n✅ = Done! I've sent your nightmare fuel\n❌ = It didn't work for some reason")
 		return
 	}
 
@@ -114,23 +122,33 @@ func onMessageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+	// if SpecialUser is set, send them their special reply
+	if config.SpecialUser != "" && config.SpecialUser == imgReq.AuthorID {
+		_, err := s.ChannelMessageSendReply(channel.ID, config.SpeicalReply, m.Reference())
+		if err != nil {
+			fmt.Printf("[%s] %v\n", imgReq.ID, err)
+			swapStatus(s, imgReq, "🤖", "❌")
+			return
+		}
+	}
+
 	// http request to AI backend
 	imgURL, err := fetchImage(&imgReq)
 	if err != nil {
 		fmt.Printf("[%s] %s\n", imgReq.ID, err)
-		setStatus(s, imgReq, "🤖", "❌")
+		swapStatus(s, imgReq, "🤖", "❌")
 		return
 	}
 
 	// send to channel
-	_, err = s.ChannelMessageSend(channel.ID, imgURL)
+	_, err = s.ChannelMessageSendReply(channel.ID, imgURL, m.Reference())
 	if err != nil {
 		fmt.Printf("[%s] %v\n", imgReq.ID, err)
-		setStatus(s, imgReq, "🛠️", "❌")
+		swapStatus(s, imgReq, "🤖", "❌")
 		return
 	}
 
-	setStatus(s, imgReq, "🛠️", "✅")
+	swapStatus(s, imgReq, "🤖", "✅")
 	fmt.Printf("[%s] Successfully sent message to channel\n", imgReq.ID)
 }
 
@@ -176,12 +194,20 @@ func fetchImage(imgReq *ImageRequest) (string, error) {
 	return imgURL, nil
 }
 
-func setStatus(s *discordgo.Session, imgReq ImageRequest, oldEmoji string, newEmoji string) error {
+func swapStatus(s *discordgo.Session, imgReq ImageRequest, oldEmoji string, newEmoji string) error {
 	err := s.MessageReactionRemove(imgReq.Channel.ID, imgReq.ID, oldEmoji, "@me")
 	if err != nil {
 		return err
 	}
 	err = s.MessageReactionAdd(imgReq.Channel.ID, imgReq.ID, newEmoji)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func setStatus(s *discordgo.Session, imgReq ImageRequest, emoji string) error {
+	err := s.MessageReactionAdd(imgReq.Channel.ID, imgReq.ID, emoji)
 	if err != nil {
 		return err
 	}
